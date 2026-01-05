@@ -38,11 +38,13 @@ api/              # Server-side API routes (if applicable)
 ```
 
 ### **Database Schema**
-The database is hosted on Supabase and consists of 4 main tables:
+The database is hosted on Supabase and consists of 6 main tables:
 1.  **`public.profiles`**: Extends Supabase Auth with user-specific data (Target weight/waist).
 2.  **`public.plan_weeks`**: Stores the training schedule (targets for Easy, Quality, and Long runs).
-3.  **`public.day_logs`**: The core activity log. Tracks daily execution (Run, OTF, Walk) and metrics (Readiness, Steps).
+3.  **`public.day_logs`**: The core activity log. Tracks daily execution (Run, OTF, Walk) and metrics (Readiness, Steps, OTF Stats).
 4.  **`public.week_checkins`**: Weekly summary data for progress tracking.
+5.  **`public.kb_workouts`**: Definitions of Kettlebell workouts (Core, Upper, Hinge, etc.).
+6.  **`public.kb_sessions`**: Logs of completed Kettlebell workouts.
 
 **Security:**
 -   Row Level Security (RLS) is **ENABLED** on all tables.
@@ -96,6 +98,7 @@ The database is hosted on Supabase and consists of 4 main tables:
 | **Git Housekeeping** | Added `.gitignore` and removed large artifacts. | To keep the repository clean and efficient for collaboration. |
 | **Planning Engine** | Deterministic logic (`lib/planning.ts`) to calculate daily workouts. | To ensure the plan adapts to the day of the week and user history (e.g. Thursday Strength rule). |
 | **Weekly View** | Added 7-day schedule to dashboard. | To help users visualize their week, track missed workouts, and look ahead. |
+| **OTF & Kettlebell Support** | Integrated specialized trackers for Orangetheory and Kettlebell workouts. | To support a hybrid training model with specific biomechanical needs (splats, specific KB moves). |
 
 ---
 

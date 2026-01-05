@@ -1,11 +1,22 @@
 import { startOfDay, addDays, differenceInCalendarDays, parseISO, isSameDay, format, subDays } from 'date-fns';
-import { PlanWeek, DayLog, TodayPlan, ReadinessColor } from './types';
+import { PlanWeek, DayLog, TodayPlan, ReadinessColor, KBWorkout, DaySchedule } from './types';
+
+// Hardcoded definitions matching DB seeds for synchronous access
+// Ideally we'd fetch these, but for V1 performance/simplicity we mirror them here.
+export const KB_WORKOUTS: Record<string, KBWorkout> = {
+    'kb-core-a': { id: 'kb-core-a', name: 'KB Core A: Stability', focus: 'Core Stability', level: 'Beginner', blocks: [] },
+    'kb-core-b': { id: 'kb-core-b', name: 'KB Core B: Rotation', focus: 'Obliques/Rotation', level: 'Beginner', blocks: [] },
+    'kb-core-c': { id: 'kb-core-c', name: 'KB Core C: Finisher', focus: 'Core Endurance', level: 'All Levels', blocks: [] },
+    'kb-upper-a': { id: 'kb-upper-a', name: 'KB Upper Body A', focus: 'Upper Body Push/Pull', level: 'Beginner', blocks: [] },
+    'kb-hinge-a': { id: 'kb-hinge-a', name: 'KB Hinge & Power', focus: 'Posterior Chain', level: 'Intermediate', blocks: [] },
+    'kb-mobility-a': { id: 'kb-mobility-a', name: 'KB Mobility Flow', focus: 'Mobility/Recovery', level: 'All Levels', blocks: [] },
+};
 
 export function getTodaysPlan(
     today: Date,
     planWeeks: PlanWeek[],
     dayLogs: DayLog[],
-    yesterdayReadiness?: ReadinessColor // Optional override if we want to pass a specific readiness state
+    yesterdayReadiness?: ReadinessColor
 ): TodayPlan {
     const todayStr = format(today, 'yyyy-MM-dd');
     const dayOfWeek = today.getDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
@@ -13,7 +24,6 @@ export function getTodaysPlan(
     const currentDayLabel = dayLabels[dayOfWeek];
 
     // 1. Determine active plan week
-    // We look for a week where today is >= start_date and today < start_date + 7 days
     const activeWeek = planWeeks.find(p => {
         const start = parseISO(p.start_date);
         const diff = differenceInCalendarDays(today, start);
@@ -32,83 +42,88 @@ export function getTodaysPlan(
 
     // 2. Logic Mappings
     let workoutLabel = "Rest";
-    let target = null;
+    let target: string | null = null;
     let isRestDay = false;
+    let kbWorkout: KBWorkout | undefined;
 
-    // Fixed Structure: 
-    // Mon(1): Walk + Mobility/Core
-    // Tue(2): Orangetheory
-    // Wed(3): Easy Run -> easy_run_target
-    // Thu(4): Strength/Core OR Walk
-    // Fri(5): Orangetheory
-    // Sat(6): Quality Run -> quality_run_target
-    // Sun(0): Long Run -> long_run_target
+    // Rotation Logic based on Week Number
+    const isOddWeek = (activeWeek.week_number % 2) !== 0;
 
     switch (dayOfWeek) {
-        case 1: // Monday
-            workoutLabel = "Walk + Mobility/Core";
-            target = "30-45 min walk + 8-10 min mobility";
+        case 1: // Monday: KB Focus
+            workoutLabel = "Kettlebell Strength";
+            // Odd weeks: Stability Core (A), Even weeks: Upper Body (A)
+            kbWorkout = isOddWeek ? KB_WORKOUTS['kb-core-a'] : KB_WORKOUTS['kb-upper-a'];
+            target = `${kbWorkout?.name} (30 min)`;
             break;
-        case 2: // Tuesday
+
+        case 2: // Tuesday: OTF
             workoutLabel = "Orangetheory";
-            target = "60 min class";
+            target = "60 min class (Power/Endurance)";
             break;
-        case 3: // Wednesday
+
+        case 3: // Wednesday: Easy Run + Optional KB Finisher
             workoutLabel = "Easy Run";
             target = activeWeek.easy_run_target;
+            // Optionally append a finisher instruction
+            kbWorkout = KB_WORKOUTS['kb-core-c'];
+            target += " + Optional 12-min Core Finisher";
             break;
-        case 4: // Thursday
-            // Logic: Strength/Core (or Walk if user has completed strength/core in last 5 days)
-            // Lookback: Today-5 to Today-1
-            const hasRecentStrength = checkRecentStrength(today, dayLogs);
-            if (hasRecentStrength) {
-                workoutLabel = "Walk";
-                target = "30-45 min recovery walk";
-            } else {
-                workoutLabel = "Strength/Core";
-                target = "45 min functional strength";
-            }
+
+        case 4: // Thursday: KB Focus (or Recovery Walk)
+            // Logic: Strength/Core (or Walk if user has completed strength/core in last 5 days? 
+            // Actually, for this NEW plan, Thursday is a dedicated KB day unless fatigued.)
+            // We use readiness or previous load to decide.
+            // Let's stick to the prompt: "Kettlebell workouts happen on Monday/Thursday... allows for recovery".
+            // But we keep the "Thursday Recovery" safeguard if needed? 
+            // Prompt says: "Thursday defaults to 'Strength/Core' unless...". 
+            // In the new plan, Thursday IS the second KB day.
+
+            // Odd weeks: Rotation (B), Even weeks: Hinge (A)
+            kbWorkout = isOddWeek ? KB_WORKOUTS['kb-core-b'] : KB_WORKOUTS['kb-hinge-a'];
+            workoutLabel = "Kettlebell Strength";
+            target = `${kbWorkout?.name} (30 min)`;
+
+            // Check readiness override? If Red -> Walk. Handled by generic guidance below.
             break;
-        case 5: // Friday
+
+        case 5: // Friday: OTF
             workoutLabel = "Orangetheory";
-            target = "60 min class";
+            target = "60 min class (Strength/ESP)";
             break;
-        case 6: // Saturday
+
+        case 6: // Saturday: Quality Run
             workoutLabel = "Quality Run";
             target = activeWeek.quality_run_target;
             break;
-        case 0: // Sunday
+
+        case 0: // Sunday: Long Run
             workoutLabel = "Long Run";
             target = activeWeek.long_run_target;
             break;
+
         default:
             workoutLabel = "Rest";
             isRestDay = true;
     }
 
     // 3. Readiness Guidance
-    // We check the *most recent* day log that has a readiness color, OR we might assume the UI passes today's readiness.
-    // The prompt says "Readiness (Green/Yellow/Red) affects execution guidance".
-    // We'll look for *today's* log entry to see if readiness is already set, or just return generic guidance logic.
-    // Ideally, the dashboard passes the *current* readiness status (if logged).
-    // If not logged for today, we can't give specific guidance yet, but we can provide the *rules*.
-    // However, the function signature didn't strictly require readiness input, so I'll check dayLogs for *today*.
-
     const todaysLog = dayLogs.find(l => l.date === todayStr);
-    const readiness = yesterdayReadiness || todaysLog?.readiness_color || 'Green'; // Default to Green if unknown?
-    // Actually, distinct from "Unknown". If unknown, maybe "Assess readiness".
-    // But keeping it simple as requested:
+    const readiness = yesterdayReadiness || todaysLog?.readiness_color || 'Green';
 
     let guidance = "Go as planned.";
 
     if (readiness === 'Yellow') {
-        guidance = "Reduce intensity or duration ~20%.";
+        guidance = "Reduce intensity or duration ~20%. Use lighter bell.";
     } else if (readiness === 'Red') {
-        guidance = "Replace with 30–45 min walk + 8–10 min mobility/core.";
+        guidance = "Replace with 30–45 min walk + Mobility Flow.";
+        // If Red, we might technically switch the workoutLabel too, but guidance is safer.
+        if (workoutLabel.includes('Kettlebell') || workoutLabel.includes('Orangetheory')) {
+            // Maybe swap the KB workout to Mobility A?
+            kbWorkout = KB_WORKOUTS['kb-mobility-a'];
+            // But let's leave label to show what was missed/changed in guidance.
+        }
     }
-
-    // Special case: If the planner ALREADY says "Walk + Mobility/Core" (Monday) or "Walk", 
-    // Red readiness just confirms it essentially.
 
     return {
         dayLabel: currentDayLabel,
@@ -116,15 +131,9 @@ export function getTodaysPlan(
         target,
         guidance: todaysLog?.readiness_color ? guidance : "Assess readiness first. Green: Go, Yellow: -20%, Red: Walk.",
         weekNumber: activeWeek.week_number,
-        isRestDay
+        isRestDay,
+        kbWorkout
     };
-}
-
-export interface DaySchedule extends TodayPlan {
-    date: string; // "2024-01-05"
-    isToday: boolean;
-    isPast: boolean;
-    log?: DayLog; // The actual DB log if exists
 }
 
 export function getWeekSchedule(
@@ -132,15 +141,6 @@ export function getWeekSchedule(
     planWeeks: PlanWeek[],
     dayLogs: DayLog[]
 ): DaySchedule[] {
-    // 1. Find start of current week (Monday)
-    // getDay: 0=Sun, 1=Mon. 
-    // If Sun(0), start was 6 days ago. If Mon(1), start was 0 days ago.
-    const dayMap = [6, 0, 1, 2, 3, 4, 5]; // Index 0(Sun) -> 6 days ago
-    // standard subDays(today, dayMap[today.getDay()]) 
-    // Actually date-fns 'startOfWeek' defaults to Sunday. 'startOfWeek(today, { weekStartsOn: 1 })' is better.
-    // Let's stick to simple math if we don't want to import more options, but we have date-fns.
-
-    // Let's assume Week starts Monday for this training plan (Mon=Walk, Sun=Long Run).
     const currentDay = today.getDay(); // 0-6
     const daysSinceMonday = currentDay === 0 ? 6 : currentDay - 1;
     const monday = subDays(today, daysSinceMonday);
@@ -151,7 +151,6 @@ export function getWeekSchedule(
         const date = addDays(monday, i);
         const dateStr = format(date, 'yyyy-MM-dd');
 
-        // Use our existing logic
         const plan = getTodaysPlan(date, planWeeks, dayLogs);
         const log = dayLogs.find(l => l.date === dateStr);
 
@@ -168,26 +167,16 @@ export function getWeekSchedule(
 }
 
 function checkRecentStrength(today: Date, dayLogs: DayLog[]): boolean {
-    // Check previous 5 days (not including today)
-    // Range: [today - 5, today - 1]
     const lookbackStart = subDays(today, 5);
     const lookbackEnd = subDays(today, 1);
 
-    // Filter logs in range
     const recentLogs = dayLogs.filter(l => {
         const d = parseISO(l.date);
         return d >= lookbackStart && d <= lookbackEnd;
     });
 
-    // Check for "Strength" or "Core" text match OR completed_mobility as proxy?
-    // User prompted: "completed strength/core". 
-    // Since we don't have a reliable 'completed_strength' col, we'll check:
-    // 1. planned_workout_type is 'Strength' or 'Mobility' AND it was marked completed (completed_mobility=true?)
-    // 2. OR notes contain "Strength" or "Core"
-    // Given constraints, I'll rely on our 'Mobility' type often doubling for 'Strength/Core' or text match.
-
     return recentLogs.some(l => {
-        const isStrengthType = l.planned_workout_type === 'Strength' || l.planned_workout_type === 'Mobility';
+        const isStrengthType = l.planned_workout_type === 'Strength' || l.planned_workout_type === 'Kettlebell' || l.planned_workout_type === 'Mobility';
         const isCompleted = l.completed_mobility || (l.notes && l.notes.toLowerCase().includes('strength'));
         return isStrengthType && isCompleted;
     });

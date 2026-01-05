@@ -4,22 +4,25 @@ import { useEffect, useState } from 'react';
 import { format, subDays } from 'date-fns';
 import { ReadinessSelector } from '@/app/components/ReadinessSelector';
 import { WeeklySchedule } from '@/app/components/WeeklySchedule';
+import { OTFTracker } from '@/app/components/OTFTracker';
+import { KBWorkoutCard } from '@/app/components/KBWorkoutCard';
 import { createClient } from '@/lib/supabase';
-import { DayLog, PlanWeek, ReadinessColor, TodayPlan } from '@/lib/types';
-import { getTodaysPlan, getWeekSchedule, DaySchedule } from '@/lib/planning';
+import { DayLog, PlanWeek, ReadinessColor, TodayPlan, KBWorkout, DaySchedule } from '@/lib/types';
+import { getTodaysPlan, getWeekSchedule } from '@/lib/planning';
 import { cn } from '@/lib/utils';
-import { CheckCircle, Circle, Flame, LogOut } from 'lucide-react';
+import { CheckCircle, Circle, LogOut } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
 export default function Home() {
     const router = useRouter();
     const supabase = createClient();
-    const todayStr = format(new Date(), 'yyyy-MM-dd'); // "2024-01-05"
+    const todayStr = format(new Date(), 'yyyy-MM-dd');
 
     const [loading, setLoading] = useState(true);
     const [log, setLog] = useState<DayLog | null>(null);
     const [todayPlan, setTodayPlan] = useState<TodayPlan | null>(null);
     const [weeklySchedule, setWeeklySchedule] = useState<DaySchedule[]>([]);
+    const [kbCompleted, setKbCompleted] = useState(false);
 
     useEffect(() => {
         async function fetchData() {
@@ -36,7 +39,7 @@ export default function Home() {
                 .select('*')
                 .eq('user_id', user.id);
 
-            // 2. Fetch Recent Logs (Last 7 days for lookback + current week context if needed)
+            // 2. Fetch Recent Logs
             const lookbackDate = format(subDays(new Date(), 7), 'yyyy-MM-dd');
             const { data: logs } = await supabase
                 .from('day_logs')
@@ -44,13 +47,24 @@ export default function Home() {
                 .eq('user_id', user.id)
                 .gte('date', lookbackDate);
 
+            // Fetch KB Session for today to verify completion status
+            const { data: kbSamples } = await supabase
+                .from('kb_sessions')
+                .select('*')
+                .eq('user_id', user.id)
+                .eq('date', todayStr);
+
+            if (kbSamples && kbSamples.length > 0) {
+                setKbCompleted(true);
+            }
+
             const allLogs = logs || [];
             const planWeeks = plans || [];
 
             // 3. Find/Create Today's Log
             let currentLog = allLogs.find(l => l.date === todayStr);
 
-            // 4. Calculate Plan (Deterministic)
+            // 4. Calculate Plan
             const calculatedPlan = getTodaysPlan(new Date(), planWeeks, allLogs, currentLog?.readiness_color || undefined);
             setTodayPlan(calculatedPlan);
 
@@ -107,8 +121,11 @@ export default function Home() {
     if (loading) return <div className="p-6">Loading...</div>;
     if (!log || !todayPlan) return <div className="p-6">Error loading plan.</div>;
 
+    const isOTFDay = todayPlan.workoutLabel.includes('Orangetheory');
+    const isKBDay = !!todayPlan.kbWorkout;
+
     return (
-        <div className="p-6 space-y-8 pb-20">
+        <div className="p-6 space-y-8 pb-24">
             <header className="flex justify-between items-center">
                 <div>
                     <h1 className="text-2xl font-bold">{format(new Date(), 'EEEE, MMM do')}</h1>
@@ -125,11 +142,11 @@ export default function Home() {
 
             {/* TODAY'S PLAN CARD */}
             <section className={cn(
-                "bg-blue-50 border-l-4 p-5 rounded-r-xl shadow-sm transition-all",
+                "bg-blue-50 border-l-4 p-5 rounded-r-xl shadow-sm transition-all relative overflow-hidden",
                 log.readiness_color === 'Green' ? 'border-blue-500' :
                     log.readiness_color === 'Yellow' ? 'border-yellow-500 bg-yellow-50/50' : 'border-red-500 bg-red-50/50'
             )}>
-                <div className="flex justify-between items-start">
+                <div className="flex justify-between items-start relative z-10">
                     <div>
                         <h2 className="text-sm font-bold text-gray-500 uppercase tracking-wider mb-1">Today's Plan</h2>
                         <div className="text-3xl font-extrabold text-gray-800 mb-2">{todayPlan.workoutLabel}</div>
@@ -159,8 +176,8 @@ export default function Home() {
                                         week_number: 1,
                                         start_date: startStr,
                                         easy_run_target: '30 min easy',
-                                        quality_run_target: '3 miles tempo',
-                                        long_run_target: '5 miles',
+                                        quality_run_target: 'Run/Walk Intervals', // Updated for beginner
+                                        long_run_target: '3.0 miles', // Conservative start
                                         notes: 'Intro week'
                                     });
                                     window.location.reload();
@@ -174,7 +191,7 @@ export default function Home() {
                 </div>
 
                 {/* Readiness Guidance Box */}
-                <div className="bg-white/60 p-3 rounded-lg border border-gray-100 mt-4">
+                <div className="bg-white/60 p-3 rounded-lg border border-gray-100 mt-4 relative z-10">
                     <div className="flex justify-between items-center mb-2">
                         <label className="text-xs font-semibold text-gray-600 uppercase">Readiness Assessment</label>
                         <ReadinessSelector
@@ -191,36 +208,63 @@ export default function Home() {
                 </div>
             </section>
 
-            {/* COMPLETION TOGGLES */}
-            <section className="grid grid-cols-2 gap-3">
-                <button
-                    onClick={() => updateLog({ completed_run: !log.completed_run })}
-                    className={cn("p-4 rounded-xl border-2 flex flex-col items-center gap-2 transition-all", log.completed_run ? "bg-green-100 border-green-500 text-green-800" : "bg-white border-gray-100 text-gray-400")}
-                >
-                    {log.completed_run ? <CheckCircle size={32} /> : <Circle size={32} />}
-                    <span className="font-bold">Run</span>
-                </button>
-                <button
-                    onClick={() => updateLog({ completed_otf: !log.completed_otf })}
-                    className={cn("p-4 rounded-xl border-2 flex flex-col items-center gap-2 transition-all", log.completed_otf ? "bg-orange-100 border-orange-500 text-orange-800" : "bg-white border-gray-100 text-gray-400")}
-                >
-                    {log.completed_otf ? <CheckCircle size={32} /> : <Circle size={32} />}
-                    <span className="font-bold">Orangetheory</span>
-                </button>
-                <button
-                    onClick={() => updateLog({ completed_walk: !log.completed_walk })}
-                    className={cn("p-4 rounded-xl border-2 flex flex-col items-center gap-2 transition-all", log.completed_walk ? "bg-blue-100 border-blue-500 text-blue-800" : "bg-white border-gray-100 text-gray-400")}
-                >
-                    {log.completed_walk ? <CheckCircle size={32} /> : <Circle size={32} />}
-                    <span className="font-bold">Walk</span>
-                </button>
-                <button
-                    onClick={() => updateLog({ completed_mobility: !log.completed_mobility })}
-                    className={cn("p-4 rounded-xl border-2 flex flex-col items-center gap-2 transition-all", log.completed_mobility ? "bg-purple-100 border-purple-500 text-purple-800" : "bg-white border-gray-100 text-gray-400")}
-                >
-                    {log.completed_mobility ? <CheckCircle size={32} /> : <Circle size={32} />}
-                    <span className="font-bold">Mobility/Strength</span>
-                </button>
+            {/* MAIN ACTION AREA - CONTEXTUAL */}
+            <section className="space-y-4">
+                {isOTFDay && (
+                    <OTFTracker log={log} onUpdate={updateLog} />
+                )}
+
+                {isKBDay && todayPlan.kbWorkout && (
+                    <KBWorkoutCard
+                        workout={todayPlan.kbWorkout}
+                        date={todayStr}
+                        isCompleted={kbCompleted}
+                        onComplete={() => {
+                            setKbCompleted(true);
+                            // Also mark mobility/strength as done in day_log for broader tracking
+                            updateLog({ completed_mobility: true });
+                        }}
+                    />
+                )}
+            </section>
+
+            {/* QUICK LOGGING GRID (Fallback/Add-on) */}
+            <section>
+                <h3 className="text-sm font-bold text-gray-500 uppercase tracking-wider mb-2">Quick Log</h3>
+                <div className="grid grid-cols-2 gap-3">
+                    <button
+                        onClick={() => updateLog({ completed_run: !log.completed_run })}
+                        className={cn("p-4 rounded-xl border-2 flex flex-col items-center gap-2 transition-all", log.completed_run ? "bg-green-100 border-green-500 text-green-800" : "bg-white border-gray-100 text-gray-400")}
+                    >
+                        {log.completed_run ? <CheckCircle size={32} /> : <Circle size={32} />}
+                        <span className="font-bold">Run</span>
+                    </button>
+                    {!isOTFDay && (
+                        <button
+                            onClick={() => updateLog({ completed_otf: !log.completed_otf })}
+                            className={cn("p-4 rounded-xl border-2 flex flex-col items-center gap-2 transition-all", log.completed_otf ? "bg-orange-100 border-orange-500 text-orange-800" : "bg-white border-gray-100 text-gray-400")}
+                        >
+                            {log.completed_otf ? <CheckCircle size={32} /> : <Circle size={32} />}
+                            <span className="font-bold">OTF (Extra)</span>
+                        </button>
+                    )}
+                    <button
+                        onClick={() => updateLog({ completed_walk: !log.completed_walk })}
+                        className={cn("p-4 rounded-xl border-2 flex flex-col items-center gap-2 transition-all", log.completed_walk ? "bg-blue-100 border-blue-500 text-blue-800" : "bg-white border-gray-100 text-gray-400")}
+                    >
+                        {log.completed_walk ? <CheckCircle size={32} /> : <Circle size={32} />}
+                        <span className="font-bold">Walk</span>
+                    </button>
+                    {!isKBDay && (
+                        <button
+                            onClick={() => updateLog({ completed_mobility: !log.completed_mobility })}
+                            className={cn("p-4 rounded-xl border-2 flex flex-col items-center gap-2 transition-all", log.completed_mobility ? "bg-purple-100 border-purple-500 text-purple-800" : "bg-white border-gray-100 text-gray-400")}
+                        >
+                            {log.completed_mobility ? <CheckCircle size={32} /> : <Circle size={32} />}
+                            <span className="font-bold">Mobility/Other</span>
+                        </button>
+                    )}
+                </div>
             </section>
 
             {/* WEEKLY SCHEDULE */}

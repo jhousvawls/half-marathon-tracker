@@ -1,6 +1,6 @@
-import { DaySchedule } from "@/lib/planning";
+import { DaySchedule } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { Check, Circle, X } from "lucide-react";
+import { Check, Circle, X, Flame, Dumbbell, Footprints } from "lucide-react";
 import { format, parseISO } from "date-fns";
 
 interface WeeklyScheduleProps {
@@ -16,10 +16,34 @@ export function WeeklySchedule({ schedule }: WeeklyScheduleProps) {
             </div>
             <div className="divide-y divide-gray-100">
                 {schedule.map((day) => {
-                    // completion logic: verify if any core activity was marked done
                     const log = day.log;
-                    const isDone = log?.completed_run || log?.completed_otf || log?.completed_walk || log?.completed_mobility;
-                    // If past and not done, it's missed. If today, it's in progress/pending.
+
+                    // Determine specific completion based on day type
+                    let isDone = false;
+                    let Icon = Circle;
+                    let iconColor = "text-gray-300";
+
+                    if (day.workoutLabel.includes('Orangetheory')) {
+                        isDone = !!log?.completed_otf;
+                        Icon = Flame;
+                        iconColor = isDone ? "text-orange-500" : "text-orange-200";
+                    } else if (day.workoutLabel.includes('Kettlebell') || day.workoutLabel.includes('Strength')) {
+                        isDone = !!log?.completed_mobility; // We mapped KB to mobility flag for now
+                        Icon = Dumbbell;
+                        iconColor = isDone ? "text-purple-500" : "text-purple-200";
+                    } else if (day.workoutLabel.includes('Run')) {
+                        isDone = !!log?.completed_run;
+                        Icon = Footprints; // Or a run icon if available, Footprints is closest generic
+                        iconColor = isDone ? "text-green-500" : "text-green-200";
+                    } else if (day.workoutLabel.includes('Walk')) {
+                        isDone = !!log?.completed_walk;
+                        Icon = Footprints;
+                        iconColor = isDone ? "text-blue-500" : "text-blue-200";
+                    } else {
+                        // Rest or other
+                        isDone = log?.completed_run || log?.completed_otf || log?.completed_walk || log?.completed_mobility || false;
+                    }
+
                     const isMissed = day.isPast && !isDone && !day.isRestDay;
 
                     return (
@@ -35,6 +59,11 @@ export function WeeklySchedule({ schedule }: WeeklyScheduleProps) {
                                 <div className="text-xs text-gray-400">
                                     {format(parseISO(day.date), 'd')}
                                 </div>
+                            </div>
+
+                            {/* Icon Column */}
+                            <div className="w-8 flex-shrink-0 flex justify-center">
+                                <Icon size={16} className={iconColor} />
                             </div>
 
                             {/* Activity Column */}
