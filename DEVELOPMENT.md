@@ -88,12 +88,14 @@ The database is hosted on Supabase and consists of 4 main tables:
 
 ## 4. Completed Work & Rationale
 
-| Feature | Description | Why? |
+|Feature | Description | Why? |
 | :--- | :--- | :--- |
 | **Supabase Integration** | Replaced mock data with live Supabase DB connections. | To persist user data across sessions and devices securely. |
 | **RLS Policies** | Added strict SQL policies for all tables. | To prevent users from accessing each other's sensitive health data. |
 | **Dynamic Dashboard** | Connected UI components to `day_logs` table. | To give immediate feedback on today's goals and completion status. |
 | **Git Housekeeping** | Added `.gitignore` and removed large artifacts. | To keep the repository clean and efficient for collaboration. |
+| **Planning Engine** | Deterministic logic (`lib/planning.ts`) to calculate daily workouts. | To ensure the plan adapts to the day of the week and user history (e.g. Thursday Strength rule). |
+| **Weekly View** | Added 7-day schedule to dashboard. | To help users visualize their week, track missed workouts, and look ahead. |
 
 ---
 

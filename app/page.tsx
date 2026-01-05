@@ -1,121 +1,193 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { format } from 'date-fns';
+import { format, subDays } from 'date-fns';
 import { ReadinessSelector } from '@/app/components/ReadinessSelector';
+import { WeeklySchedule } from '@/app/components/WeeklySchedule';
 import { createClient } from '@/lib/supabase';
-import { DayLog, ReadinessColor } from '@/lib/types';
-import { getReadinessAdjustment, cn } from '@/lib/utils';
+import { DayLog, PlanWeek, ReadinessColor, TodayPlan } from '@/lib/types';
+import { getTodaysPlan, getWeekSchedule, DaySchedule } from '@/lib/planning';
+import { cn } from '@/lib/utils';
 import { CheckCircle, Circle, Flame, LogOut } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
 export default function Home() {
     const router = useRouter();
     const supabase = createClient();
-    const today = format(new Date(), 'yyyy-MM-dd');
+    const todayStr = format(new Date(), 'yyyy-MM-dd'); // "2024-01-05"
 
     const [loading, setLoading] = useState(true);
     const [log, setLog] = useState<DayLog | null>(null);
+    const [todayPlan, setTodayPlan] = useState<TodayPlan | null>(null);
+    const [weeklySchedule, setWeeklySchedule] = useState<DaySchedule[]>([]);
 
     useEffect(() => {
-        async function fetchDay() {
+        async function fetchData() {
+            setLoading(true);
             const { data: { user } } = await supabase.auth.getUser();
             if (!user) {
                 router.push('/login');
                 return;
             }
 
-            // Fetch today's log
-            const { data, error } = await supabase
+            // 1. Fetch Plan Weeks
+            const { data: plans } = await supabase
+                .from('plan_weeks')
+                .select('*')
+                .eq('user_id', user.id);
+
+            // 2. Fetch Recent Logs (Last 7 days for lookback + current week context if needed)
+            const lookbackDate = format(subDays(new Date(), 7), 'yyyy-MM-dd');
+            const { data: logs } = await supabase
                 .from('day_logs')
                 .select('*')
-                .eq('date', today)
                 .eq('user_id', user.id)
-                .single();
+                .gte('date', lookbackDate);
 
-            if (data) {
-                setLog(data);
+            const allLogs = logs || [];
+            const planWeeks = plans || [];
+
+            // 3. Find/Create Today's Log
+            let currentLog = allLogs.find(l => l.date === todayStr);
+
+            // 4. Calculate Plan (Deterministic)
+            const calculatedPlan = getTodaysPlan(new Date(), planWeeks, allLogs, currentLog?.readiness_color || undefined);
+            setTodayPlan(calculatedPlan);
+
+            // 5. Calculate Full Week
+            const weekSchedule = getWeekSchedule(new Date(), planWeeks, allLogs);
+            setWeeklySchedule(weekSchedule);
+
+            if (currentLog) {
+                setLog(currentLog);
             } else {
-                // Create default log if missing
-                const newLog = {
+                const newLogPayload = {
                     user_id: user.id,
-                    date: today,
-                    planned_workout_type: 'Run',
-                    planned_target: '30 min Easy',
+                    date: todayStr,
+                    planned_workout_type: calculatedPlan.workoutLabel,
+                    planned_target: calculatedPlan.target || '',
                     completed_run: false,
                     readiness_color: 'Green'
                 };
-                const { data: inserted } = await supabase.from('day_logs').insert(newLog).select().single();
-                if (inserted) setLog(inserted);
+
+                const { data: inserted } = await supabase.from('day_logs').insert(newLogPayload).select().single();
+                if (inserted) {
+                    setLog(inserted);
+                }
             }
             setLoading(false);
         }
-        fetchDay();
-    }, [router, supabase, today]);
+        fetchData();
+    }, [router, supabase, todayStr]);
 
     const updateLog = async (updates: Partial<DayLog>) => {
         if (!log) return;
+
         // Optimistic update
-        setLog({ ...log, ...updates });
-        // DB update
+        const updatedLog = { ...log, ...updates };
+        setLog(updatedLog);
+
+        // Update weekly schedule optimistic
+        if (weeklySchedule.length > 0) {
+            setWeeklySchedule(prev => prev.map(day => {
+                if (day.isToday) {
+                    return { ...day, log: { ...day.log!, ...updates } as DayLog };
+                }
+                return day;
+            }));
+        }
+
+        if (updates.readiness_color && todayPlan) {
+            window.location.reload();
+        }
+
         await supabase.from('day_logs').update(updates).eq('id', log.id);
     };
 
-
     if (loading) return <div className="p-6">Loading...</div>;
-
-    if (!log) return (
-        <div className="p-6 text-center">
-            <h2 className="text-xl font-bold text-red-600 mb-2">Error Loading Data</h2>
-            <p className="text-gray-600 mb-4">Could not load today's plan. This usually means the database security policies need to be updated.</p>
-            <button
-                onClick={() => window.location.reload()}
-                className="bg-blue-600 text-white px-4 py-2 rounded-lg"
-            >
-                Retry
-            </button>
-        </div>
-    );
-
-
-    const adjustedTarget = getReadinessAdjustment(log.readiness_color as ReadinessColor, log.planned_target);
+    if (!log || !todayPlan) return <div className="p-6">Error loading plan.</div>;
 
     return (
-        <div className="p-6 space-y-6">
-            <header className="flex justify-between items-center mb-6">
+        <div className="p-6 space-y-8 pb-20">
+            <header className="flex justify-between items-center">
                 <div>
                     <h1 className="text-2xl font-bold">{format(new Date(), 'EEEE, MMM do')}</h1>
-                    <p className="text-gray-500">Focus: Consistency</p>
+                    <p className="text-gray-500">
+                        {todayPlan.weekNumber ? `Week ${todayPlan.weekNumber} of Plan` : "No Active Plan"}
+                    </p>
                 </div>
                 <div className="flex gap-2">
-                    <div className="flex items-center gap-1 bg-orange-100 text-orange-700 px-3 py-1 rounded-full font-bold">
-                        <Flame size={18} />
-                        <span>0</span>
-                    </div>
                     <button onClick={() => supabase.auth.signOut().then(() => router.push('/login'))}>
                         <LogOut className="text-gray-400" />
                     </button>
                 </div>
             </header>
 
-            {/* TODAY' CARD */}
+            {/* TODAY'S PLAN CARD */}
             <section className={cn(
                 "bg-blue-50 border-l-4 p-5 rounded-r-xl shadow-sm transition-all",
                 log.readiness_color === 'Green' ? 'border-blue-500' :
                     log.readiness_color === 'Yellow' ? 'border-yellow-500 bg-yellow-50/50' : 'border-red-500 bg-red-50/50'
             )}>
-                <h2 className="text-sm font-bold text-gray-500 uppercase tracking-wider mb-1">Today's Plan</h2>
-                <div className="text-3xl font-extrabold text-gray-800 mb-2">{log.planned_workout_type}</div>
-                <div className="text-lg font-medium text-blue-800 mb-4">
-                    {adjustedTarget}
+                <div className="flex justify-between items-start">
+                    <div>
+                        <h2 className="text-sm font-bold text-gray-500 uppercase tracking-wider mb-1">Today's Plan</h2>
+                        <div className="text-3xl font-extrabold text-gray-800 mb-2">{todayPlan.workoutLabel}</div>
+
+                        {todayPlan.target ? (
+                            <div className="text-lg font-medium text-blue-800 mb-4">
+                                {todayPlan.target}
+                            </div>
+                        ) : (
+                            <div className="text-sm text-gray-500 mb-4 italic">
+                                {todayPlan.isRestDay ? "Rest & Recover" : "Follow standard routine"}
+                            </div>
+                        )}
+
+                        {todayPlan.workoutLabel === "Rest / No Plan" && (
+                            <button
+                                onClick={async () => {
+                                    setLoading(true);
+                                    const { data: { user } } = await supabase.auth.getUser();
+                                    if (!user) return;
+
+                                    const lastMonday = subDays(new Date(), new Date().getDay() === 0 ? 6 : new Date().getDay() - 1);
+                                    const startStr = format(lastMonday, 'yyyy-MM-dd');
+
+                                    await supabase.from('plan_weeks').insert({
+                                        user_id: user.id,
+                                        week_number: 1,
+                                        start_date: startStr,
+                                        easy_run_target: '30 min easy',
+                                        quality_run_target: '3 miles tempo',
+                                        long_run_target: '5 miles',
+                                        notes: 'Intro week'
+                                    });
+                                    window.location.reload();
+                                }}
+                                className="mt-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold py-2 px-4 rounded-lg shadow transition-colors"
+                            >
+                                Start Sample Plan (Week 1)
+                            </button>
+                        )}
+                    </div>
                 </div>
 
-                <div className="bg-white/60 p-3 rounded-lg">
-                    <label className="text-xs font-semibold text-gray-600">Athlytic Readiness</label>
-                    <ReadinessSelector
-                        value={log.readiness_color as ReadinessColor}
-                        onChange={(val) => updateLog({ readiness_color: val })}
-                    />
+                {/* Readiness Guidance Box */}
+                <div className="bg-white/60 p-3 rounded-lg border border-gray-100 mt-4">
+                    <div className="flex justify-between items-center mb-2">
+                        <label className="text-xs font-semibold text-gray-600 uppercase">Readiness Assessment</label>
+                        <ReadinessSelector
+                            value={log.readiness_color as ReadinessColor}
+                            onChange={(val) => {
+                                updateLog({ readiness_color: val });
+                                window.location.reload();
+                            }}
+                        />
+                    </div>
+                    <p className="text-sm text-gray-700 italic">
+                        &quot;{todayPlan.guidance}&quot;
+                    </p>
                 </div>
             </section>
 
@@ -147,8 +219,13 @@ export default function Home() {
                     className={cn("p-4 rounded-xl border-2 flex flex-col items-center gap-2 transition-all", log.completed_mobility ? "bg-purple-100 border-purple-500 text-purple-800" : "bg-white border-gray-100 text-gray-400")}
                 >
                     {log.completed_mobility ? <CheckCircle size={32} /> : <Circle size={32} />}
-                    <span className="font-bold">Mobility</span>
+                    <span className="font-bold">Mobility/Strength</span>
                 </button>
+            </section>
+
+            {/* WEEKLY SCHEDULE */}
+            <section>
+                <WeeklySchedule schedule={weeklySchedule} />
             </section>
         </div>
     );

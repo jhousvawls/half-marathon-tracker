@@ -1,4 +1,4 @@
-export type WorkoutType = 'Run' | 'OTF' | 'Walk' | 'Mobility' | 'Rest' | 'CrossTrain';
+export type WorkoutType = 'Run' | 'OTF' | 'Walk' | 'Mobility' | 'Rest' | 'CrossTrain' | 'Strength';
 export type RunType = 'Easy' | 'Quality' | 'Long' | 'Recovery';
 export type ReadinessColor = 'Green' | 'Yellow' | 'Red';
 
@@ -35,4 +35,13 @@ export interface WeekCheckIn {
     otf_completed: number;
     eating_out_count: number;
     energy: number;
+}
+
+export interface TodayPlan {
+    dayLabel: string; // "Monday", "Tuesday", etc.
+    workoutLabel: string; // "Easy Run", "Walk + Mobility/Core"
+    target: string | null; // "30 min", null if fixed
+    guidance: string; // Readiness guidance text
+    weekNumber?: number; // 1, 2, etc.
+    isRestDay: boolean;
 }
